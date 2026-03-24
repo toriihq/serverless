@@ -51,9 +51,7 @@ jobs:
 
       - name: Run tests against version packaged with npm pack
         run: |
-          TEMP_ARRAY=($(echo $GITHUB_REF | tr "/" "\n"))
-          TAG=${TEMP_ARRAY[@]: -1}
-          PACKAGE_VERSION=${TAG:1}
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
           mkdir "toriihq-serverless-${PACKAGE_VERSION}"
           tar zxf "toriihq-serverless-${PACKAGE_VERSION}.tgz" -C "toriihq-serverless-${PACKAGE_VERSION}"
           cp -R test "toriihq-serverless-${PACKAGE_VERSION}/package"
