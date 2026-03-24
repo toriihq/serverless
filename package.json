@@ -1,11 +1,14 @@
 {
-  "name": "serverless",
+  "name": "@toriihq/serverless",
   "version": "3.38.0",
   "description": "Serverless Framework - Build web, mobile and IoT applications with serverless architectures using AWS Lambda, Azure Functions, Google CloudFunctions & more",
   "preferGlobal": true,
   "homepage": "https://serverless.com/framework/docs/",
   "author": "serverless.com",
   "repository": "serverless/serverless",
+  "publishConfig": {
+    "access": "restricted"
+  },
   "keywords": [
     "serverless",
     "lambda",

@@ -1,4 +1,4 @@
-# Version tags only
+# Version tags only (or manual dispatch for testing)
 
 name: Publish
 
@@ -6,6 +6,16 @@ on:
   push:
     tags:
       - v[0-9]+.[0-9]+.[0-9]+
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (skip actual npm publish)'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 jobs:
   prePublishPackageTest:
@@ -44,20 +54,22 @@ jobs:
           TEMP_ARRAY=($(echo $GITHUB_REF | tr "/" "\n"))
           TAG=${TEMP_ARRAY[@]: -1}
           PACKAGE_VERSION=${TAG:1}
-          mkdir "serverless-${PACKAGE_VERSION}"
-          tar zxf "serverless-${PACKAGE_VERSION}.tgz" -C "serverless-${PACKAGE_VERSION}"
-          cp -R test "serverless-${PACKAGE_VERSION}/package"
-          ln -s "$(pwd)"/node_modules "serverless-${PACKAGE_VERSION}/package/node_modules"
-          cd "serverless-${PACKAGE_VERSION}/package"
+          mkdir "toriihq-serverless-${PACKAGE_VERSION}"
+          tar zxf "toriihq-serverless-${PACKAGE_VERSION}.tgz" -C "toriihq-serverless-${PACKAGE_VERSION}"
+          cp -R test "toriihq-serverless-${PACKAGE_VERSION}/package"
+          ln -s "$(pwd)"/node_modules "toriihq-serverless-${PACKAGE_VERSION}/package/node_modules"
+          cd "toriihq-serverless-${PACKAGE_VERSION}/package"
           script -e -c "npm test -- -b"
 
   npmPublish:
     name: Publish to npm
     needs: prePublishPackageTest
     runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write  # required for OIDC trusted publishing
     env:
-      # It'll work with secrets.GITHUB_TOKEN (which is provided by GitHub unconditionally)
-      # Still then release author would be "github-actions". It's better if it's dedicated repo bot
       GITHUB_TOKEN: ${{ secrets.USER_GITHUB_TOKEN }}
     steps:
       - name: Checkout repository
@@ -88,11 +100,13 @@ jobs:
           npm update --save-dev --no-save
 
       - name: Publish new version
-        # Note: Setting NODE_AUTH_TOKEN as job|workspace wide env var won't work
-        #       as it appears actions/setup-node sets own value
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish
+        run: |
+          if [[ "${{ github.event.inputs.dry_run }}" == "true" ]]; then
+            echo "Dry run — skipping publish"
+            npm publish --provenance --access restricted --dry-run
+          else
+            npm publish --provenance --access restricted
+          fi
 
       - name: Build standalone artifacts
         run: npm run pkg:build
