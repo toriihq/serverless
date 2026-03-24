@@ -23,10 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Retrieve dependencies from cache
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         id: cacheNpm
         with:
           path: |
@@ -35,7 +35,7 @@ jobs:
           key: npm-v16-${{ runner.os }}-${{ github.ref }}-${{ hashFiles('package.json') }}
 
       - name: Install Node.js and npm
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: 16.x
           registry-url: https://registry.npmjs.org
@@ -71,10 +71,10 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.USER_GITHUB_TOKEN }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Retrieve dependencies from cache
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         id: cacheNpm
         with:
           path: |
@@ -83,7 +83,7 @@ jobs:
           key: npm-v16-${{ runner.os }}-refs/heads/main-${{ hashFiles('package.json') }}
 
       - name: Install Node.js and npm
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: 16.x
           registry-url: https://registry.npmjs.org
