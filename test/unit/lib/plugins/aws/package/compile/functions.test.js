@@ -1,6 +1,6 @@
 'use strict';
 
-const AWS = require('aws-sdk');
+const { S3Client } = require('@aws-sdk/client-s3');
 const fse = require('fs-extra');
 const fsp = require('fs').promises;
 const path = require('path');
@@ -82,17 +82,13 @@ describe('AwsCompileFunctions', () => {
 
     beforeEach(() => {
       testFilePath = createTmpFile('dummy-artifact');
-      requestStub = sinon.stub(AWS, 'S3').returns({
-        getObject: () => ({
-          createReadStream() {
-            return fse.createReadStream(testFilePath);
-          },
-        }),
+      requestStub = sinon.stub(S3Client.prototype, 'send').resolves({
+        Body: fse.createReadStream(testFilePath),
       });
     });
 
     afterEach(() => {
-      AWS.S3.restore();
+      requestStub.restore();
     });
 
     it('should download the file and replace the artifact path for function packages', async () => {
@@ -129,17 +125,17 @@ describe('AwsCompileFunctions', () => {
     });
 
     it('should not access AWS.S3 if URL is not an S3 URl', async () => {
-      AWS.S3.restore();
-      const myRequestStub = sinon.stub(AWS, 'S3').returns({
-        getObject: () => {
-          throw new Error('should not be invoked');
-        },
-      });
+      requestStub.restore();
+      const myRequestStub = sinon
+        .stub(S3Client.prototype, 'send')
+        .rejects(new Error('should not be invoked'));
       awsCompileFunctions.serverless.service.functions[functionName].package.artifact =
         'https://s33amazonaws.com/this/that';
-      return expect(awsCompileFunctions.downloadPackageArtifacts()).to.be.fulfilled.then(() => {
-        expect(myRequestStub.callCount).to.equal(1);
-      });
+      return expect(awsCompileFunctions.downloadPackageArtifacts())
+        .to.be.fulfilled.then(() => {
+          expect(myRequestStub.callCount).to.equal(0);
+        })
+        .finally(() => myRequestStub.restore());
     });
   });
 

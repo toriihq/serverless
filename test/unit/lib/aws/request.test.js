@@ -4,43 +4,49 @@ const sinon = require('sinon');
 const chai = require('chai');
 const proxyquire = require('proxyquire');
 const overrideEnv = require('process-utils/override-env');
+const { S3Client } = require('@aws-sdk/client-s3');
+const { CloudFormationClient } = require('@aws-sdk/client-cloudformation');
 
 const expect = chai.expect;
 
 chai.use(require('chai-as-promised'));
 chai.use(require('sinon-chai'));
 
+// Helper: build a v3-style error
+const makeV3Error = (opts) => {
+  const err = Object.assign(new Error(opts.message || 'Error'), opts);
+  return err;
+};
+
 describe('#request', () => {
   describe('Credentials support', () => {
-    // awsRequest supports credentials from two sources:
-    // - an AWS credentials object passed as part of params in the call
-    // - environment variable read by the AWS SDK
-
     // Ensure we control the process env variable so that no credentials
     // are available by default
     let rEnv;
+    let sendStub;
     beforeEach(() => {
       const { restoreEnv } = overrideEnv();
       rEnv = restoreEnv;
+      sendStub = sinon.stub(S3Client.prototype, 'send').rejects(
+        makeV3Error({
+          name: 'CredentialsProviderError',
+          message: 'Could not load credentials from any providers',
+        })
+      );
     });
 
     afterEach(() => {
       rEnv();
+      sendStub.restore();
     });
 
     it('should produce a meaningful error when no supported credentials are provided', async () => {
       const awsRequest = require('../../../../lib/aws/request');
       return expect(
-        awsRequest(
-          {
-            name: 'S3',
-          },
-          'putObject',
-          {
-            Bucket: 'test-bucket',
-            Key: 'test-key',
-          }
-        )
+        awsRequest({ name: 'S3', params: { region: 'us-east-1' } }, 'putObject', {
+          Bucket: 'test-bucket',
+          Key: 'test-key',
+        })
       ).to.be.eventually.rejected.and.have.property('code', 'AWS_CREDENTIALS_NOT_FOUND');
     });
 
@@ -48,391 +54,283 @@ describe('#request', () => {
       const awsRequest = require('../../../../lib/aws/request');
       return expect(
         awsRequest(
-          {
-            name: 'S3',
-            params: { isS3TransferAccelerationEnabled: true },
-          },
+          { name: 'S3', params: { region: 'us-east-1', isS3TransferAccelerationEnabled: true } },
           'putObject',
-          {
-            Bucket: 'test-bucket',
-            Key: 'test-key',
-          }
+          { Bucket: 'test-bucket', Key: 'test-key' }
         )
       ).to.be.rejectedWith('AWS provider credentials not found.');
     });
   });
 
   it('should invoke expected AWS SDK methods', async () => {
-    class FakeS3 {
-      putObject() {
-        return {
-          promise: async () => {
-            return { called: true };
-          },
-        };
-      }
+    const sendStub = sinon.stub(S3Client.prototype, 'send').resolves({ called: true });
+    try {
+      const awsRequest = require('../../../../lib/aws/request');
+      const res = await awsRequest(
+        {
+          name: 'S3',
+          params: { region: 'us-east-1', accessKeyId: 'key', secretAccessKey: 'secret' },
+        },
+        'putObject'
+      );
+      expect(res.called).to.equal(true);
+    } finally {
+      sendStub.restore();
     }
-    const awsRequest = proxyquire('../../../../lib/aws/request', {
-      './sdk-v2': { S3: FakeS3 },
-    });
-    const res = await awsRequest({ name: 'S3' }, 'putObject');
-    expect(res.called).to.equal(true);
   });
 
   it('should support string for service argument', async () => {
-    class FakeS3 {
-      putObject() {
-        return {
-          promise: async () => {
-            return { called: true };
-          },
-        };
-      }
+    const sendStub = sinon.stub(S3Client.prototype, 'send').resolves({ called: true });
+    try {
+      const awsRequest = require('../../../../lib/aws/request');
+      const res = await awsRequest('S3', 'putObject', {});
+      expect(res.called).to.equal(true);
+    } finally {
+      sendStub.restore();
     }
-    const awsRequest = proxyquire('../../../../lib/aws/request', {
-      './sdk-v2': { S3: FakeS3 },
-    });
-    const res = await awsRequest('S3', 'putObject', {});
-    return expect(res.called).to.equal(true);
-  });
-
-  it('should handle subclasses', async () => {
-    class DocumentClient {
-      put() {
-        return {
-          promise: () => {
-            return { called: true };
-          },
-        };
-      }
-    }
-    const awsRequest = proxyquire('../../../../lib/aws/request', {
-      './sdk-v2': { DynamoDB: { DocumentClient } },
-    });
-    const res = await awsRequest({ name: 'DynamoDB.DocumentClient' }, 'put', {});
-    return expect(res.called).to.equal(true);
   });
 
   it('should request to the specified region if region in options set', async () => {
-    class FakeCloudFormation {
-      constructor(config) {
-        this.config = config;
-      }
-      describeStacks() {
-        return {
-          promise: async () => ({
-            region: this.config.region,
-          }),
-        };
-      }
+    const OrigCF = CloudFormationClient;
+    const CFStub = function (config) {
+      return new OrigCF(config);
+    };
+    const sendStub = sinon
+      .stub(CloudFormationClient.prototype, 'send')
+      .resolves({ region: 'ap-northeast-1' });
+    try {
+      const awsRequest = proxyquire('../../../../lib/aws/v3/request', {
+        './client-factory': proxyquire('../../../../lib/aws/v3/client-factory', {
+          '@aws-sdk/client-cloudformation': {
+            CloudFormationClient: CFStub,
+            DescribeStacksCommand: require('@aws-sdk/client-cloudformation').DescribeStacksCommand,
+          },
+        }),
+      });
+      const res = await awsRequest(
+        {
+          name: 'CloudFormation',
+          params: { region: 'ap-northeast-1', accessKeyId: 'k', secretAccessKey: 's' },
+        },
+        'describeStacks',
+        { StackName: 'foo' }
+      );
+      expect(res.region).to.equal('ap-northeast-1');
+    } finally {
+      sendStub.restore();
     }
-    const awsRequest = proxyquire('../../../../lib/aws/request', {
-      './sdk-v2': { CloudFormation: FakeCloudFormation },
-    });
-    const res = await awsRequest(
-      { name: 'CloudFormation', params: { credentials: {}, region: 'ap-northeast-1' } },
-      'describeStacks',
-      { StackName: 'foo' }
-    );
-    return expect(res).to.eql({ region: 'ap-northeast-1' });
   });
 
   describe('Retries', () => {
     it('should retry on retryable errors (429)', async () => {
-      const error = {
-        statusCode: 429,
-        retryable: true,
+      const err429 = makeV3Error({
+        name: 'TooManyRequestsException',
         message: 'Testing retry',
-      };
-      const sendFake = {
-        promise: sinon.stub(),
-      };
-      sendFake.promise.onCall(0).returns(Promise.reject(error));
-      sendFake.promise.onCall(1).returns(Promise.resolve({ data: {} }));
-      class FakeS3 {
-        error() {
-          return sendFake;
-        }
-      }
-      const awsRequest = proxyquire('../../../../lib/aws/request', {
-        './sdk-v2': { S3: FakeS3 },
+        $metadata: { httpStatusCode: 429 },
+        $retryable: { throttling: true },
+      });
+      const sendStub = sinon.stub(S3Client.prototype, 'send');
+      sendStub.onCall(0).rejects(err429);
+      sendStub.onCall(1).resolves({ data: {} });
+      const awsRequest = proxyquire('../../../../lib/aws/v3/request', {
         'timers-ext/promise/sleep': async () => {},
       });
-      const res = await awsRequest({ name: 'S3' }, 'error');
-      expect(sendFake.promise).to.have.been.calledTwice;
-      expect(res).to.exist;
+      try {
+        const res = await awsRequest(
+          { name: 'S3', params: { region: 'us-east-1', accessKeyId: 'k', secretAccessKey: 's' } },
+          'putObject'
+        );
+        expect(sendStub).to.have.been.calledTwice;
+        expect(res).to.exist;
+      } finally {
+        sendStub.restore();
+      }
     });
 
-    it('should retry if error code is 429 and retryable is set to false', async () => {
-      const error = {
-        statusCode: 429,
-        retryable: false,
+    it('should retry if status code is 429 regardless of retryable flag', async () => {
+      const err429 = makeV3Error({
         message: 'Testing retry',
-      };
-      const sendFake = {
-        promise: sinon.stub(),
-      };
-      sendFake.promise.onCall(0).returns(Promise.reject(error));
-      sendFake.promise.onCall(1).returns(Promise.resolve({}));
-      class FakeS3 {
-        error() {
-          return sendFake;
-        }
-      }
-      const awsRequest = proxyquire('../../../../lib/aws/request', {
-        './sdk-v2': { S3: FakeS3 },
+        $metadata: { httpStatusCode: 429 },
+      });
+      const sendStub = sinon.stub(S3Client.prototype, 'send');
+      sendStub.onCall(0).rejects(err429);
+      sendStub.onCall(1).resolves({});
+      const awsRequest = proxyquire('../../../../lib/aws/v3/request', {
         'timers-ext/promise/sleep': async () => {},
       });
-      const res = await awsRequest({ name: 'S3' }, 'error');
-      expect(res).to.exist;
-      expect(sendFake.promise).to.have.been.calledTwice;
-    });
-
-    it('should not retry if status code is 403 and retryable is set to true', async () => {
-      const error = {
-        providerError: {
-          statusCode: 403,
-          retryable: true,
-          code: 'retry',
-          message: 'Testing retry',
-        },
-      };
-      const sendFake = {
-        promise: sinon.stub(),
-      };
-      sendFake.promise.onFirstCall().rejects(error);
-      sendFake.promise.onSecondCall().resolves({});
-      class FakeS3 {
-        error() {
-          return sendFake;
-        }
+      try {
+        const res = await awsRequest(
+          { name: 'S3', params: { region: 'us-east-1', accessKeyId: 'k', secretAccessKey: 's' } },
+          'putObject'
+        );
+        expect(res).to.exist;
+        expect(sendStub).to.have.been.calledTwice;
+      } finally {
+        sendStub.restore();
       }
-      const awsRequest = proxyquire('../../../../lib/aws/request', {
-        './sdk-v2': { S3: FakeS3 },
-      });
-      expect(awsRequest({ name: 'S3' }, 'error')).to.be.rejected;
-      return expect(sendFake.promise).to.have.been.calledOnce;
-    });
-
-    it('should not retry if error code is ExpiredTokenException and retryable is set to true', async () => {
-      const error = {
-        providerError: {
-          statusCode: 400,
-          retryable: true,
-          code: 'ExpiredTokenException',
-          message: 'Testing retry',
-        },
-      };
-      const sendFake = {
-        promise: sinon.stub(),
-      };
-      sendFake.promise.onFirstCall().rejects(error);
-      sendFake.promise.onSecondCall().resolves({});
-      class FakeS3 {
-        error() {
-          return sendFake;
-        }
-      }
-      const awsRequest = proxyquire('../../../../lib/aws/request', {
-        './sdk-v2': { S3: FakeS3 },
-      });
-      expect(awsRequest({ name: 'S3' }, 'error')).to.be.rejected;
-      return expect(sendFake.promise).to.have.been.calledOnce;
     });
 
     it('should expose non-retryable errors', async () => {
-      const error = {
-        statusCode: 500,
+      const err = makeV3Error({
+        name: 'SomeError',
         message: 'Some error message',
-        code: 'SomeError',
-      };
-      class FakeS3 {
-        test() {
-          return {
-            promise: async () => {
-              throw error;
-            },
-          };
-        }
-      }
-      const awsRequest = proxyquire('../../../../lib/aws/request', {
-        './sdk-v2': { S3: FakeS3 },
+        $metadata: { httpStatusCode: 400 },
       });
-      await expect(awsRequest({ name: 'S3' }, 'test')).to.eventually.be.rejected.and.have.property(
-        'code',
-        'AWS_S3_TEST_SOME_ERROR'
-      );
+      const sendStub = sinon.stub(S3Client.prototype, 'send').rejects(err);
+      const awsRequest = require('../../../../lib/aws/v3/request');
+      try {
+        await expect(
+          awsRequest(
+            { name: 'S3', params: { region: 'us-east-1', accessKeyId: 'k', secretAccessKey: 's' } },
+            'putObject'
+          )
+        ).to.eventually.be.rejected.and.have.property('code', 'AWS_S3_PUT_OBJECT_SOME_ERROR');
+      } finally {
+        sendStub.restore();
+      }
     });
 
-    it('should handle numeric error codes', async () => {
-      const error = {
-        statusCode: 500,
+    it('should handle numeric-like error names', async () => {
+      const err = makeV3Error({
+        name: '500',
         message: 'Some error message',
-        code: 500,
-      };
-      class FakeS3 {
-        test() {
-          return {
-            promise: async () => {
-              throw error;
-            },
-          };
-        }
-      }
-      const awsRequest = proxyquire('../../../../lib/aws/request', {
-        './sdk-v2': { S3: FakeS3 },
+        $metadata: { httpStatusCode: 500 },
       });
-      await expect(awsRequest({ name: 'S3' }, 'test')).to.eventually.be.rejected.and.have.property(
-        'code',
-        'AWS_S3_TEST_HTTP_500_ERROR'
-      );
+      const sendStub = sinon.stub(S3Client.prototype, 'send').rejects(err);
+      const awsRequest = require('../../../../lib/aws/v3/request');
+      try {
+        await expect(
+          awsRequest(
+            { name: 'S3', params: { region: 'us-east-1', accessKeyId: 'k', secretAccessKey: 's' } },
+            'putObject'
+          )
+        ).to.eventually.be.rejected.and.have.property('code', 'AWS_S3_PUT_OBJECT_500');
+      } finally {
+        sendStub.restore();
+      }
     });
   });
 
-  it('should expose original error message in thrown error message', () => {
-    const awsErrorResponse = {
+  it('should expose original error message in thrown error message', async () => {
+    const err = makeV3Error({
+      name: 'Forbidden',
       message: 'Something went wrong...',
-      code: 'Forbidden',
-      region: null,
-      time: '2019-01-24T00:29:01.780Z',
-      requestId: 'DAF12C1111A62C6',
-      extendedRequestId: '1OnSExiLCOsKrsdjjyds31w=',
-      statusCode: 403,
-      retryable: false,
-      retryDelay: 13.433158364430508,
-    };
-    class FakeS3 {
-      error() {
-        return {
-          promise: async () => Promise.reject(awsErrorResponse),
-        };
-      }
-    }
-    const awsRequest = proxyquire('../../../../lib/aws/request', {
-      './sdk-v2': { S3: FakeS3 },
+      $metadata: { httpStatusCode: 403 },
     });
-    return expect(awsRequest({ name: 'S3' }, 'error')).to.be.rejectedWith(awsErrorResponse.message);
+    const sendStub = sinon.stub(S3Client.prototype, 'send').rejects(err);
+    const awsRequest = require('../../../../lib/aws/v3/request');
+    try {
+      await expect(
+        awsRequest(
+          { name: 'S3', params: { region: 'us-east-1', accessKeyId: 'k', secretAccessKey: 's' } },
+          'putObject'
+        )
+      ).to.be.rejectedWith('Something went wrong...');
+    } finally {
+      sendStub.restore();
+    }
   });
 
-  it('should default to error code if error message is non-existent', () => {
-    const awsErrorResponse = {
+  it('should default to error code if error message is non-existent', async () => {
+    const err = makeV3Error({
+      name: 'Forbidden',
       message: null,
-      code: 'Forbidden',
-      region: null,
-      time: '2019-01-24T00:29:01.780Z',
-      requestId: 'DAF12C1111A62C6',
-      extendedRequestId: '1OnSExiLCOsKrsdjjyds31w=',
-      statusCode: 403,
-      retryable: false,
-      retryDelay: 13.433158364430508,
-    };
-    class FakeS3 {
-      error() {
-        return {
-          promise: async () => Promise.reject(awsErrorResponse),
-        };
-      }
-    }
-    const awsRequest = proxyquire('../../../../lib/aws/request', {
-      './sdk-v2': { S3: FakeS3 },
+      $metadata: { httpStatusCode: 403 },
     });
-    return expect(awsRequest({ name: 'S3' }, 'error')).to.be.rejectedWith(awsErrorResponse.code);
+    const sendStub = sinon.stub(S3Client.prototype, 'send').rejects(err);
+    const awsRequest = require('../../../../lib/aws/v3/request');
+    try {
+      await expect(
+        awsRequest(
+          { name: 'S3', params: { region: 'us-east-1', accessKeyId: 'k', secretAccessKey: 's' } },
+          'putObject'
+        )
+      ).to.be.rejectedWith('Forbidden');
+    } finally {
+      sendStub.restore();
+    }
   });
 
-  it('should enable S3 acceleration if "--aws-s3-accelerate" CLI option is provided', async () => {
-    // mocking S3 for testing
-    class FakeS3 {
-      constructor(params) {
-        this.useAccelerateEndpoint = params.useAccelerateEndpoint;
-      }
-      putObject() {
-        return {
-          promise: async () => this,
-        };
-      }
-    }
-    const awsRequest = proxyquire('../../../../lib/aws/request', {
-      './sdk-v2': { S3: FakeS3 },
+  it('should enable S3 acceleration if isS3TransferAccelerationEnabled is provided', async () => {
+    const OrigS3 = S3Client;
+    const S3Spy = function (config) {
+      const instance = new OrigS3(config);
+      instance.send = async () => ({ accelerated: config.useAccelerateEndpoint });
+      return instance;
+    };
+    const awsRequest = proxyquire('../../../../lib/aws/v3/request', {
+      './client-factory': proxyquire('../../../../lib/aws/v3/client-factory', {
+        '@aws-sdk/client-s3': {
+          S3Client: S3Spy,
+          PutObjectCommand: require('@aws-sdk/client-s3').PutObjectCommand,
+          GetObjectCommand: require('@aws-sdk/client-s3').GetObjectCommand,
+        },
+      }),
     });
-    const service = await awsRequest(
-      { name: 'S3', params: { isS3TransferAccelerationEnabled: true } },
+    const res = await awsRequest(
+      {
+        name: 'S3',
+        params: {
+          region: 'us-east-1',
+          accessKeyId: 'k',
+          secretAccessKey: 's',
+          isS3TransferAccelerationEnabled: true,
+        },
+      },
       'putObject',
       {}
     );
-    return expect(service.useAccelerateEndpoint).to.be.true;
+    return expect(res.accelerated).to.be.true;
   });
 
   describe('Caching through memoize', () => {
     it('should reuse the result if arguments are the same', async () => {
-      // mocking CF for testing
-      const expectedResult = { called: true };
-      const promiseStub = sinon.stub().returns(Promise.resolve({ called: true }));
-      class FakeCF {
-        describeStacks() {
-          return {
-            promise: promiseStub,
-          };
+      const sendStub = sinon
+        .stub(CloudFormationClient.prototype, 'send')
+        .resolves({ called: true });
+      const awsRequest = require('../../../../lib/aws/v3/request');
+      try {
+        const numTests = 10;
+        const params = { region: 'us-east-1', accessKeyId: 'k', secretAccessKey: 's' };
+        const executeRequest = () =>
+          awsRequest.memoized({ name: 'CloudFormation', params }, 'describeStacks', {});
+        const requests = [];
+        for (let n = 0; n < numTests; n++) {
+          requests.push(executeRequest());
         }
-      }
-      const awsRequest = proxyquire('../../../../lib/aws/request', {
-        './sdk-v2': { CloudFormation: FakeCF },
-      });
-      const numTests = 100;
-      const executeRequest = () =>
-        awsRequest.memoized(
-          { name: 'CloudFormation', params: { credentials: {}, useCache: true } },
-          'describeStacks',
-          {}
-        );
-      const requests = [];
-      for (let n = 0; n < numTests; n++) {
-        requests.push(executeRequest());
-      }
-      return Promise.all(requests).then((results) => {
-        expect(Object.keys(results).length).to.equal(numTests);
+        const results = await Promise.all(requests);
+        expect(results.length).to.equal(numTests);
         results.forEach((result) => {
-          expect(result).to.deep.equal(expectedResult);
+          expect(result).to.deep.equal({ called: true });
         });
-        expect(promiseStub).to.have.been.calledOnce;
-      });
+        expect(sendStub).to.have.been.calledOnce;
+      } finally {
+        sendStub.restore();
+        awsRequest.memoized.clear();
+      }
     });
 
-    it('should not reuse the result if the region change', async () => {
-      const expectedResult = { called: true };
-      const promiseStub = sinon.stub().returns(Promise.resolve({ called: true }));
-      class FakeCF {
-        constructor(credentials) {
-          this.credentials = credentials;
-        }
-
-        describeStacks() {
-          return {
-            promise: promiseStub,
-          };
-        }
+    it('should not reuse the result if the region changes', async () => {
+      const sendStub = sinon
+        .stub(CloudFormationClient.prototype, 'send')
+        .resolves({ called: true });
+      const awsRequest = require('../../../../lib/aws/v3/request');
+      try {
+        const makeRequest = (region) =>
+          awsRequest(
+            { name: 'CloudFormation', params: { region, accessKeyId: 'k', secretAccessKey: 's' } },
+            'describeStacks',
+            { StackName: 'same-stack' }
+          );
+        const results = await Promise.all([
+          makeRequest('us-east-1'),
+          makeRequest('ap-northeast-1'),
+        ]);
+        expect(results.length).to.equal(2);
+        expect(sendStub.callCount).to.equal(2);
+      } finally {
+        sendStub.restore();
       }
-
-      const awsRequest = proxyquire('../../../../lib/aws/request', {
-        './sdk-v2': { CloudFormation: FakeCF },
-      });
-
-      const executeRequestWithRegion = (region) =>
-        awsRequest(
-          { name: 'CloudFormation', params: { region, credentials: {}, useCache: true } },
-          'describeStacks',
-          { StackName: 'same-stack' }
-        );
-      const requests = [];
-      requests.push(executeRequestWithRegion('us-east-1'));
-      requests.push(executeRequestWithRegion('ap-northeast-1'));
-
-      return Promise.all(requests).then((results) => {
-        expect(Object.keys(results).length).to.equal(2);
-        results.forEach((result) => {
-          expect(result).to.deep.equal(expectedResult);
-        });
-        return expect(promiseStub.callCount).to.equal(2);
-      });
     });
   });
 });

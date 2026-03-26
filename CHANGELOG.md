@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [3.38.1-torii.1](https://github.com/toriihq/serverless/compare/v3.38.0...v3.38.1-torii.1) (2026-03-26)
+
+### ⚠ BREAKING CHANGES
+
+- **aws:** Replaced `aws-sdk` v2 with `@aws-sdk/*` v3 clients. The `aws-sdk` package is no longer
+  a dependency. If you rely on `provider.sdk` or directly require `aws-sdk` from within Serverless
+  plugins that depend on this package, you must migrate to `@aws-sdk/*` v3 clients.
+
+### Features
+
+- **aws:** Migrate AWS SDK from v2 to v3 (`@aws-sdk/*` modular clients) ([#1](https://github.com/toriihq/serverless/pull/1))
+  - All AWS API calls now use typed v3 command objects (`XxxCommand`)
+  - Credential loading uses `@aws-sdk/credential-providers` (`fromIni`, flat credential shape)
+  - HTTP retries on 429 and 5xx with exponential backoff
+  - Per-service client caching for performance
+
+### Bug Fixes
+
+- **ci:** Bump actions/checkout, cache, setup-node to v4
+- **ci:** Read package version from package.json instead of git ref
+
 ## [3.38.0](https://github.com/serverless/serverless/compare/v3.37.0...v3.38.0) (2023-11-21)
 
 ### Features

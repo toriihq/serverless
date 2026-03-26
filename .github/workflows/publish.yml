@@ -5,7 +5,8 @@ name: Publish
 on:
   push:
     tags:
-      - v[0-9]+.[0-9]+.[0-9]+
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -66,7 +67,7 @@ jobs:
     environment: npm-publish
     permissions:
       contents: read
-      id-token: write  # required for OIDC trusted publishing
+      id-token: write # required for OIDC trusted publishing
     env:
       GITHUB_TOKEN: ${{ secrets.USER_GITHUB_TOKEN }}
     steps:
@@ -80,7 +81,7 @@ jobs:
           path: |
             ~/.npm
             node_modules
-          key: npm-v16-${{ runner.os }}-refs/heads/main-${{ hashFiles('package.json') }}
+          key: npm-v16-${{ runner.os }}-${{ github.ref }}-${{ hashFiles('package.json') }}
 
       - name: Install Node.js and npm
         uses: actions/setup-node@v4
