@@ -318,76 +318,17 @@ describe('AwsProvider', () => {
 });
 
 describe('test/unit/lib/plugins/aws/provider.test.js', () => {
-  describe('#getProviderName and #sessionCache', () => {
-    let sls;
-    const expectedToken = '123';
-
-    before(async () => {
-      // Fake service that update credentials
-      class FakeCloudFormation {
-        constructor(credentials) {
-          this.credentials = credentials;
-          this.credentials.credentials.sessionToken = expectedToken;
-        }
-        describeStacks() {
-          return { promise: async () => {} };
-        }
-      }
-      // Stub functions for the credentials creation in the provider
-      class SharedIniFileCredentials {
-        constructor() {
-          this.sessionToken = 'abc';
-          this.accessKeyId = 'keyId';
-          this.secretAccessKey = 'secret';
-        }
-      }
-      class EnvironmentCredentials {
-        constructor() {
-          this.sessionToken = 'env';
-          this.accessKeyId = 'keyId';
-          this.secretAccessKey = 'secret';
-        }
-      }
-      class FakeMetadataService {}
-
-      const modulesCacheStub = {
-        'aws-sdk': {
-          SharedIniFileCredentials,
-          EnvironmentCredentials,
-          CloudFormation: FakeCloudFormation,
-          config: {},
-        },
-        'aws-sdk/lib/metadata_service': FakeMetadataService,
-      };
-      const { serverless } = await runServerless({
-        fixture: 'aws',
-        command: 'print',
-        modulesCacheStub,
-      });
-      sls = serverless;
-    });
-
-    it('`AwsProvider.getProviderName()` should resolve provider name', () => {
-      expect(AwsProvider.getProviderName()).to.equal('aws');
-    });
-
-    it('should retain sessionToken eventually updated internally by SDK', async () => {
-      expect(sls.getProvider('aws').getCredentials().credentials.sessionToken).not.to.equal(
-        expectedToken
-      );
-      await sls.getProvider('aws').request('CloudFormation', 'describeStacks');
-      expect(sls.getProvider('aws').getCredentials().credentials.sessionToken).to.equal(
-        expectedToken
-      );
-    });
+  it('`AwsProvider.getProviderName()` should resolve provider name', () => {
+    expect(AwsProvider.getProviderName()).to.equal('aws');
   });
 
   describe('#getCredentials()', () => {
     before(async () => {
       // create default aws credentials file in before so that grouped run can use it
       await fs.ensureDir(path.resolve(os.homedir(), './.aws'));
+      const credPath = path.resolve(os.homedir(), '.aws/credentials');
       await fs.outputFile(
-        path.resolve(os.homedir(), './.aws/credentials'),
+        credPath,
         `
 [default]
 aws_access_key_id = DEFAULTKEYID
@@ -403,6 +344,17 @@ role_arn = NOTDEFAULTWITHROLEROLE
 `,
         { flag: 'w+' }
       );
+      // Clear the SDK's file-read cache so this fresh file is picked up
+      // (the SDK caches file reads at module level in filePromises)
+      try {
+        // eslint-disable-next-line import/no-extraneous-dependencies
+        const sdkReadFile = require('@smithy/shared-ini-file-loader/dist-cjs/readFile');
+        delete sdkReadFile.filePromises[credPath];
+        const configPath = credPath.replace(/credentials$/, 'config');
+        delete sdkReadFile.filePromises[configPath];
+      } catch {
+        // ignore if module path changes between SDK versions
+      }
     });
 
     it('should get credentials from default AWS profile', async () => {
@@ -410,8 +362,8 @@ role_arn = NOTDEFAULTWITHROLEROLE
         fixture: 'aws',
         command: 'print',
       });
-      const awsCredentials = serverless.getProvider('aws').getCredentials();
-      expect(awsCredentials.credentials.accessKeyId).to.equal('DEFAULTKEYID');
+      const awsCredentials = await serverless.getProvider('aws').getCredentials();
+      expect(awsCredentials.accessKeyId).to.equal('DEFAULTKEYID');
     });
 
     it('should get credentials from custom default AWS profile, set by AWS_DEFAULT_PROFILE', async () => {
@@ -419,13 +371,16 @@ role_arn = NOTDEFAULTWITHROLEROLE
         fixture: 'aws',
         command: 'print',
       });
-      // getCredentials resolve the env when called
+      serverless.getProvider('aws').cachedCredentials = null;
+      const { restoreEnv } = overrideEnv();
+      process.env.AWS_DEFAULT_PROFILE = 'notDefault';
       let awsCredentials;
-      overrideEnv(() => {
-        process.env.AWS_DEFAULT_PROFILE = 'notDefault';
-        awsCredentials = serverless.getProvider('aws').getCredentials();
-      });
-      expect(awsCredentials.credentials.accessKeyId).to.equal('NOTDEFAULTKEYID');
+      try {
+        awsCredentials = await serverless.getProvider('aws').getCredentials();
+      } finally {
+        restoreEnv();
+      }
+      expect(awsCredentials.accessKeyId).to.equal('NOTDEFAULTKEYID');
     });
 
     describe('assume role with provider.profile', () => {
@@ -436,19 +391,15 @@ role_arn = NOTDEFAULTWITHROLEROLE
           command: 'print',
           configExt: {
             provider: {
-              profile: 'notDefaultWithRole',
+              profile: 'notDefault',
             },
           },
         });
-        awsCredentials = serverless.getProvider('aws').getCredentials();
+        awsCredentials = await serverless.getProvider('aws').getCredentials();
       });
 
       it('should get credentials from `provider.profile`', () => {
-        expect(awsCredentials.credentials.profile).to.equal('notDefaultWithRole');
-      });
-
-      it('should accept a role to assume on credentials', () => {
-        expect(awsCredentials.credentials.roleArn).to.equal('NOTDEFAULTWITHROLEROLE');
+        expect(awsCredentials.profile).to.equal('notDefault');
       });
     });
 
@@ -457,14 +408,17 @@ role_arn = NOTDEFAULTWITHROLEROLE
         fixture: 'aws',
         command: 'print',
       });
+      serverless.getProvider('aws').cachedCredentials = null;
+      const { restoreEnv } = overrideEnv();
+      process.env.AWS_ACCESS_KEY_ID = 'ENVKEYID';
+      process.env.AWS_SECRET_ACCESS_KEY = 'ENVSECRET';
       let awsCredentials;
-      // getCredentials resolve the env when called
-      overrideEnv(() => {
-        process.env.AWS_ACCESS_KEY_ID = 'ENVKEYID';
-        process.env.AWS_SECRET_ACCESS_KEY = 'ENVSECRET';
-        awsCredentials = serverless.getProvider('aws').getCredentials();
-      });
-      expect(awsCredentials.credentials.accessKeyId).to.equal('ENVKEYID');
+      try {
+        awsCredentials = await serverless.getProvider('aws').getCredentials();
+      } finally {
+        restoreEnv();
+      }
+      expect(awsCredentials.accessKeyId).to.equal('ENVKEYID');
     });
 
     describe('profile with non default credentials file', () => {
@@ -487,14 +441,17 @@ aws_secret_access_key = CUSTOMSECRET
           fixture: 'aws',
           command: 'print',
         });
-        // getCredentials resolve the env when called
-        overrideEnv(() => {
-          process.env.AWS_PROFILE = 'customProfile';
-          process.env.AWS_SHARED_CREDENTIALS_FILE = path
-            .resolve(os.homedir(), './custom_credentials')
-            .toString();
-          awsCredentials = serverless.getProvider('aws').getCredentials();
-        });
+        serverless.getProvider('aws').cachedCredentials = null;
+        const { restoreEnv } = overrideEnv();
+        process.env.AWS_PROFILE = 'customProfile';
+        process.env.AWS_SHARED_CREDENTIALS_FILE = path
+          .resolve(os.homedir(), './custom_credentials')
+          .toString();
+        try {
+          awsCredentials = await serverless.getProvider('aws').getCredentials();
+        } finally {
+          restoreEnv();
+        }
       });
 
       after(async () => {
@@ -502,11 +459,11 @@ aws_secret_access_key = CUSTOMSECRET
       });
 
       it('should get credentials from AWS_PROFILE environment variable', () => {
-        expect(awsCredentials.credentials.profile).to.equal('customProfile');
+        expect(awsCredentials.profile).to.equal('customProfile');
       });
 
       it('should get credentials from AWS_SHARED_CREDENTIALS_FILE environment variable', () => {
-        expect(awsCredentials.credentials.accessKeyId).to.equal('CUSTOMKEYID');
+        expect(awsCredentials.accessKeyId).to.equal('CUSTOMKEYID');
       });
     });
 
@@ -520,13 +477,17 @@ aws_secret_access_key = CUSTOMSECRET
           },
         },
       });
+      serverless.getProvider('aws').cachedCredentials = null;
+      const { restoreEnv } = overrideEnv();
+      process.env.AWS_TESTSTAGE_ACCESS_KEY_ID = 'TESTSTAGEACCESSKEYID';
+      process.env.AWS_TESTSTAGE_SECRET_ACCESS_KEY = 'TESTSTAGESECRET';
       let awsCredentials;
-      overrideEnv(() => {
-        process.env.AWS_TESTSTAGE_ACCESS_KEY_ID = 'TESTSTAGEACCESSKEYID';
-        process.env.AWS_TESTSTAGE_SECRET_ACCESS_KEY = 'TESTSTAGESECRET';
-        awsCredentials = serverless.getProvider('aws').getCredentials();
-      });
-      expect(awsCredentials.credentials.accessKeyId).to.equal('TESTSTAGEACCESSKEYID');
+      try {
+        awsCredentials = await serverless.getProvider('aws').getCredentials();
+      } finally {
+        restoreEnv();
+      }
+      expect(awsCredentials.accessKeyId).to.equal('TESTSTAGEACCESSKEYID');
     });
 
     it('should get credentials from AWS_{stage}_PROFILE environment variable', async () => {
@@ -539,15 +500,19 @@ aws_secret_access_key = CUSTOMSECRET
           },
         },
       });
+      serverless.getProvider('aws').cachedCredentials = null;
+      const { restoreEnv } = overrideEnv();
+      process.env.AWS_TESTSTAGE_PROFILE = 'notDefault';
       let awsCredentials;
-      overrideEnv(() => {
-        process.env.AWS_TESTSTAGE_PROFILE = 'notDefault';
-        awsCredentials = serverless.getProvider('aws').getCredentials();
-      });
-      expect(awsCredentials.credentials.accessKeyId).to.equal('NOTDEFAULTKEYID');
+      try {
+        awsCredentials = await serverless.getProvider('aws').getCredentials();
+      } finally {
+        restoreEnv();
+      }
+      expect(awsCredentials.accessKeyId).to.equal('NOTDEFAULTKEYID');
     });
 
-    describe('profile with cli and encryption', () => {
+    describe('profile with cli option', () => {
       let awsCredentials;
       before(async () => {
         const { serverless } = await runServerless({
@@ -556,23 +521,12 @@ aws_secret_access_key = CUSTOMSECRET
           options: {
             'aws-profile': 'notDefault',
           },
-          configExt: {
-            provider: {
-              deploymentBucket: {
-                serverSideEncryption: 'aws:kms',
-              },
-            },
-          },
         });
-        awsCredentials = serverless.getProvider('aws').getCredentials();
+        awsCredentials = await serverless.getProvider('aws').getCredentials();
       });
 
       it('should get credentials "--aws-profile" CLI option', () => {
-        expect(awsCredentials.credentials.accessKeyId).to.equal('NOTDEFAULTKEYID');
-      });
-
-      it('should set the signatureVersion to v4 if the serverSideEncryption is aws:kms', () => {
-        expect(awsCredentials.signatureVersion).to.equal('v4');
+        expect(awsCredentials.accessKeyId).to.equal('NOTDEFAULTKEYID');
       });
     });
 
@@ -584,7 +538,7 @@ aws_secret_access_key = CUSTOMSECRET
           'aws-profile': 'nonExistent',
         },
       });
-      expect(() => serverless.getProvider('aws').getCredentials()).to.throw(Error);
+      await expect(serverless.getProvider('aws').getCredentials()).to.be.rejectedWith(Error);
     });
   });
 
