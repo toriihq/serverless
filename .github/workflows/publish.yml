@@ -21,7 +21,6 @@ on:
 jobs:
   prePublishPackageTest:
     name: Prepublish package test
-    if: false # TODO: re-enable after PR is merged
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -63,6 +62,7 @@ jobs:
 
   npmPublish:
     name: Publish to npm
+    needs: prePublishPackageTest
     runs-on: ubuntu-latest
     environment: npm-publish
     permissions:
