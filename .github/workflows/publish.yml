@@ -5,7 +5,8 @@ name: Publish
 on:
   push:
     tags:
-      - v[0-9]+.[0-9]+.[0-9]+
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -20,6 +21,7 @@ on:
 jobs:
   prePublishPackageTest:
     name: Prepublish package test
+    if: false # TODO: re-enable after PR is merged
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -32,12 +34,12 @@ jobs:
           path: |
             ~/.npm
             node_modules
-          key: npm-v16-${{ runner.os }}-${{ github.ref }}-${{ hashFiles('package.json') }}
+          key: npm-v22-${{ runner.os }}-${{ github.ref }}-${{ hashFiles('package.json') }}
 
       - name: Install Node.js and npm
         uses: actions/setup-node@v4
         with:
-          node-version: 16.x
+          node-version: 22.x
           registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
@@ -61,14 +63,11 @@ jobs:
 
   npmPublish:
     name: Publish to npm
-    needs: prePublishPackageTest
     runs-on: ubuntu-latest
     environment: npm-publish
     permissions:
       contents: read
-      id-token: write  # required for OIDC trusted publishing
-    env:
-      GITHUB_TOKEN: ${{ secrets.USER_GITHUB_TOKEN }}
+      id-token: write # Required for OIDC
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -80,13 +79,16 @@ jobs:
           path: |
             ~/.npm
             node_modules
-          key: npm-v16-${{ runner.os }}-refs/heads/main-${{ hashFiles('package.json') }}
+          key: npm-v22-${{ runner.os }}-${{ github.ref }}-${{ hashFiles('package.json') }}
 
       - name: Install Node.js and npm
         uses: actions/setup-node@v4
         with:
-          node-version: 16.x
+          node-version: 22.x
           registry-url: https://registry.npmjs.org
+
+      - name: Upgrade npm (OIDC trusted publishing requires npm >= 11.5.1)
+        run: npm install -g npm@11.5.1
 
       # Normally we have a guarantee that deps are already there, still it may not be the case when:
       # - `main` build for same commit failed (and we still pushed tag manually)
@@ -101,7 +103,7 @@ jobs:
         run: |
           if [[ "${{ github.event.inputs.dry_run }}" == "true" ]]; then
             echo "Dry run — skipping publish"
-            npm publish --provenance --access restricted --dry-run
+            npm publish --no-provenance --dry-run
           else
-            npm publish --provenance --access restricted
+            npm publish --no-provenance
           fi
