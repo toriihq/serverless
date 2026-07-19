@@ -31,9 +31,9 @@ jobs:
         id: cacheNpm
         with:
           path: |
-            ~/.npm
+            ~/.cache/yarn
             node_modules
-          key: npm-v22-${{ runner.os }}-${{ github.ref }}-${{ hashFiles('package.json') }}
+          key: yarn-v22-${{ runner.os }}-${{ github.ref }}-${{ hashFiles('yarn.lock') }}
 
       - name: Install Node.js and npm
         uses: actions/setup-node@v4
@@ -43,9 +43,7 @@ jobs:
 
       - name: Install dependencies
         if: steps.cacheNpm.outputs.cache-hit != 'true'
-        run: |
-          npm update --no-save
-          npm update --save-dev --no-save
+        run: yarn install --frozen-lockfile
 
       - name: Build local package
         run: npm pack
@@ -77,9 +75,9 @@ jobs:
         id: cacheNpm
         with:
           path: |
-            ~/.npm
+            ~/.cache/yarn
             node_modules
-          key: npm-v22-${{ runner.os }}-${{ github.ref }}-${{ hashFiles('package.json') }}
+          key: yarn-v22-${{ runner.os }}-${{ github.ref }}-${{ hashFiles('yarn.lock') }}
 
       - name: Install Node.js and npm
         uses: actions/setup-node@v4
@@ -95,9 +93,7 @@ jobs:
       # - We've pushed tag manually before `main` build finalized
       - name: Install dependencies
         if: steps.cacheNpm.outputs.cache-hit != 'true'
-        run: |
-          npm update --no-save
-          npm update --save-dev --no-save
+        run: yarn install --frozen-lockfile
 
       - name: Publish new version
         run: |
