@@ -323,12 +323,26 @@ describe('test/unit/lib/plugins/aws/provider.test.js', () => {
   });
 
   describe('#getCredentials()', () => {
+    // Resolve credentials from a dedicated temp home so it is deterministic regardless of
+    // process-wide state that earlier test files in the full suite can perturb: ambient
+    // HOME, the SDK's memoized home dir, or leaked AWS_* env vars. Every credential-
+    // resolving test below starts from a clean env (overrideEnv) and pins HOME to this dir.
+    const testHome = path.resolve(os.tmpdir(), 'sls-getcreds-home');
+    const credentialsPath = path.resolve(testHome, '.aws/credentials');
+    const customCredentialsPath = path.resolve(testHome, 'custom_credentials');
+    const clearSdkFileCache = (...paths) => {
+      try {
+        // eslint-disable-next-line import/no-extraneous-dependencies
+        const sdkReadFile = require('@smithy/shared-ini-file-loader/dist-cjs/readFile');
+        for (const p of paths) delete sdkReadFile.filePromises[p];
+      } catch {
+        // ignore if module path changes between SDK versions
+      }
+    };
+
     before(async () => {
-      // create default aws credentials file in before so that grouped run can use it
-      await fs.ensureDir(path.resolve(os.homedir(), './.aws'));
-      const credPath = path.resolve(os.homedir(), '.aws/credentials');
       await fs.outputFile(
-        credPath,
+        credentialsPath,
         `
 [default]
 aws_access_key_id = DEFAULTKEYID
@@ -344,46 +358,14 @@ role_arn = NOTDEFAULTWITHROLEROLE
 `,
         { flag: 'w+' }
       );
-      // Clear the SDK's file-read cache so this fresh file is picked up
-      // (the SDK caches file reads at module level in filePromises)
-      try {
-        // eslint-disable-next-line import/no-extraneous-dependencies
-        const sdkReadFile = require('@smithy/shared-ini-file-loader/dist-cjs/readFile');
-        delete sdkReadFile.filePromises[credPath];
-        const configPath = credPath.replace(/credentials$/, 'config');
-        delete sdkReadFile.filePromises[configPath];
-      } catch {
-        // ignore if module path changes between SDK versions
-      }
+      clearSdkFileCache(credentialsPath, credentialsPath.replace(/credentials$/, 'config'));
     });
 
     it('should get credentials from default AWS profile', async () => {
-      const { serverless } = await runServerless({
-        fixture: 'aws',
-        command: 'print',
-      });
-      // Make resolution deterministic regardless of process-wide state that earlier
-      // test files in the full suite can perturb: AWS_* env vars, the SDK's memoized
-      // home dir, or a stale ambient HOME. Write the default credentials file into a
-      // dedicated temp home, start from a fully clean env, and pin HOME to it.
+      const { serverless } = await runServerless({ fixture: 'aws', command: 'print' });
       serverless.getProvider('aws').cachedCredentials = null;
-      const testHome = path.resolve(os.tmpdir(), 'sls-default-profile-home');
-      const credPath = path.resolve(testHome, '.aws/credentials');
-      await fs.outputFile(
-        credPath,
-        '[default]\naws_access_key_id = DEFAULTKEYID\naws_secret_access_key = DEFAULTSECRET\n',
-        { flag: 'w+' }
-      );
       const { restoreEnv } = overrideEnv();
       process.env.HOME = testHome;
-      // Drop any cached read of this path so the fresh file is used.
-      try {
-        // eslint-disable-next-line import/no-extraneous-dependencies
-        const sdkReadFile = require('@smithy/shared-ini-file-loader/dist-cjs/readFile');
-        delete sdkReadFile.filePromises[credPath];
-      } catch {
-        // ignore if module path changes between SDK versions
-      }
       let awsCredentials;
       try {
         awsCredentials = await serverless.getProvider('aws').getCredentials();
@@ -400,6 +382,7 @@ role_arn = NOTDEFAULTWITHROLEROLE
       });
       serverless.getProvider('aws').cachedCredentials = null;
       const { restoreEnv } = overrideEnv();
+      process.env.HOME = testHome;
       process.env.AWS_DEFAULT_PROFILE = 'notDefault';
       let awsCredentials;
       try {
@@ -422,7 +405,14 @@ role_arn = NOTDEFAULTWITHROLEROLE
             },
           },
         });
-        awsCredentials = await serverless.getProvider('aws').getCredentials();
+        serverless.getProvider('aws').cachedCredentials = null;
+        const { restoreEnv } = overrideEnv();
+        process.env.HOME = testHome;
+        try {
+          awsCredentials = await serverless.getProvider('aws').getCredentials();
+        } finally {
+          restoreEnv();
+        }
       });
 
       it('should get credentials from `provider.profile`', () => {
@@ -437,6 +427,7 @@ role_arn = NOTDEFAULTWITHROLEROLE
       });
       serverless.getProvider('aws').cachedCredentials = null;
       const { restoreEnv } = overrideEnv();
+      process.env.HOME = testHome;
       process.env.AWS_ACCESS_KEY_ID = 'ENVKEYID';
       process.env.AWS_SECRET_ACCESS_KEY = 'ENVSECRET';
       let awsCredentials;
@@ -452,7 +443,7 @@ role_arn = NOTDEFAULTWITHROLEROLE
       let awsCredentials;
       before(async () => {
         await fs.outputFile(
-          path.resolve(os.homedir(), './custom_credentials'),
+          customCredentialsPath,
           `
 [default]
 aws_access_key_id = DEFAULTKEYID
@@ -464,16 +455,16 @@ aws_secret_access_key = CUSTOMSECRET
 `,
           { flag: 'w+' }
         );
+        clearSdkFileCache(customCredentialsPath);
         const { serverless } = await runServerless({
           fixture: 'aws',
           command: 'print',
         });
         serverless.getProvider('aws').cachedCredentials = null;
         const { restoreEnv } = overrideEnv();
+        process.env.HOME = testHome;
         process.env.AWS_PROFILE = 'customProfile';
-        process.env.AWS_SHARED_CREDENTIALS_FILE = path
-          .resolve(os.homedir(), './custom_credentials')
-          .toString();
+        process.env.AWS_SHARED_CREDENTIALS_FILE = customCredentialsPath;
         try {
           awsCredentials = await serverless.getProvider('aws').getCredentials();
         } finally {
@@ -482,7 +473,7 @@ aws_secret_access_key = CUSTOMSECRET
       });
 
       after(async () => {
-        await fs.remove(path.resolve(os.homedir(), './custom_credentials'));
+        await fs.remove(customCredentialsPath);
       });
 
       it('should get credentials from AWS_PROFILE environment variable', () => {
@@ -506,6 +497,7 @@ aws_secret_access_key = CUSTOMSECRET
       });
       serverless.getProvider('aws').cachedCredentials = null;
       const { restoreEnv } = overrideEnv();
+      process.env.HOME = testHome;
       process.env.AWS_TESTSTAGE_ACCESS_KEY_ID = 'TESTSTAGEACCESSKEYID';
       process.env.AWS_TESTSTAGE_SECRET_ACCESS_KEY = 'TESTSTAGESECRET';
       let awsCredentials;
@@ -529,6 +521,7 @@ aws_secret_access_key = CUSTOMSECRET
       });
       serverless.getProvider('aws').cachedCredentials = null;
       const { restoreEnv } = overrideEnv();
+      process.env.HOME = testHome;
       process.env.AWS_TESTSTAGE_PROFILE = 'notDefault';
       let awsCredentials;
       try {
@@ -549,7 +542,14 @@ aws_secret_access_key = CUSTOMSECRET
             'aws-profile': 'notDefault',
           },
         });
-        awsCredentials = await serverless.getProvider('aws').getCredentials();
+        serverless.getProvider('aws').cachedCredentials = null;
+        const { restoreEnv } = overrideEnv();
+        process.env.HOME = testHome;
+        try {
+          awsCredentials = await serverless.getProvider('aws').getCredentials();
+        } finally {
+          restoreEnv();
+        }
       });
 
       it('should get credentials "--aws-profile" CLI option', () => {
@@ -565,7 +565,14 @@ aws_secret_access_key = CUSTOMSECRET
           'aws-profile': 'nonExistent',
         },
       });
-      await expect(serverless.getProvider('aws').getCredentials()).to.be.rejectedWith(Error);
+      serverless.getProvider('aws').cachedCredentials = null;
+      const { restoreEnv } = overrideEnv();
+      process.env.HOME = testHome;
+      try {
+        await expect(serverless.getProvider('aws').getCredentials()).to.be.rejectedWith(Error);
+      } finally {
+        restoreEnv();
+      }
     });
   });
 
