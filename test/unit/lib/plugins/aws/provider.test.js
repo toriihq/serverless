@@ -362,19 +362,28 @@ role_arn = NOTDEFAULTWITHROLEROLE
         fixture: 'aws',
         command: 'print',
       });
-      // Isolate from AWS_* env vars leaked by earlier tests in the full suite
-      // (e.g. AWS_DEFAULT_PROFILE / AWS_PROFILE / AWS_SHARED_CREDENTIALS_FILE),
-      // which would otherwise redirect resolution away from the default profile
-      // and default credentials file. Copy the env (to preserve HOME) and scrub
-      // only the interfering variables.
+      // Make resolution deterministic regardless of process-wide state that earlier
+      // test files in the full suite can perturb: AWS_* env vars, the SDK's memoized
+      // home dir, or a stale ambient HOME. Write the default credentials file into a
+      // dedicated temp home, start from a fully clean env, and pin HOME to it.
       serverless.getProvider('aws').cachedCredentials = null;
-      const { restoreEnv } = overrideEnv({ asCopy: true });
-      delete process.env.AWS_DEFAULT_PROFILE;
-      delete process.env.AWS_PROFILE;
-      delete process.env.AWS_SHARED_CREDENTIALS_FILE;
-      delete process.env.AWS_ACCESS_KEY_ID;
-      delete process.env.AWS_SECRET_ACCESS_KEY;
-      delete process.env.AWS_SESSION_TOKEN;
+      const testHome = path.resolve(os.tmpdir(), 'sls-default-profile-home');
+      const credPath = path.resolve(testHome, '.aws/credentials');
+      await fs.outputFile(
+        credPath,
+        '[default]\naws_access_key_id = DEFAULTKEYID\naws_secret_access_key = DEFAULTSECRET\n',
+        { flag: 'w+' }
+      );
+      const { restoreEnv } = overrideEnv();
+      process.env.HOME = testHome;
+      // Drop any cached read of this path so the fresh file is used.
+      try {
+        // eslint-disable-next-line import/no-extraneous-dependencies
+        const sdkReadFile = require('@smithy/shared-ini-file-loader/dist-cjs/readFile');
+        delete sdkReadFile.filePromises[credPath];
+      } catch {
+        // ignore if module path changes between SDK versions
+      }
       let awsCredentials;
       try {
         awsCredentials = await serverless.getProvider('aws').getCredentials();
