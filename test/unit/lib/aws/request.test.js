@@ -170,6 +170,33 @@ describe('#request', () => {
       }
     });
 
+    it('should retry throttling errors identified by name (HTTP 400, no $retryable)', async () => {
+      // Regression: Query-protocol services (e.g. CloudFormation) return "Rate exceeded"
+      // as a ThrottlingException with HTTP 400 and no $retryable flag. Retryability must be
+      // determined by error name, not just status code / $retryable.
+      const throttleErr = makeV3Error({
+        name: 'ThrottlingException',
+        message: 'Rate exceeded',
+        $metadata: { httpStatusCode: 400 },
+      });
+      const sendStub = sinon.stub(S3Client.prototype, 'send');
+      sendStub.onCall(0).rejects(throttleErr);
+      sendStub.onCall(1).resolves({ data: {} });
+      const awsRequest = proxyquire('../../../../lib/aws/v3/request', {
+        'timers-ext/promise/sleep': async () => {},
+      });
+      try {
+        const res = await awsRequest(
+          { name: 'S3', params: { region: 'us-east-1', accessKeyId: 'k', secretAccessKey: 's' } },
+          'putObject'
+        );
+        expect(sendStub).to.have.been.calledTwice;
+        expect(res).to.exist;
+      } finally {
+        sendStub.restore();
+      }
+    });
+
     it('should expose non-retryable errors', async () => {
       const err = makeV3Error({
         name: 'SomeError',
