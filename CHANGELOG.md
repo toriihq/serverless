@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [3.38.7](https://github.com/serverless/serverless/compare/v3.38.6...v3.38.7) (2026-07-19)
+
+### Bug Fixes
+
+- **aws-v3:** retry throttling errors classified by name ([#7](https://github.com/serverless/serverless/issues/7)) ([1f72ee7](https://github.com/serverless/serverless/commit/1f72ee7f7da77cfcbccc72f2d66ba9027918c247))
+
 ## [3.38.1-torii.1](https://github.com/toriihq/serverless/compare/v3.38.0...v3.38.1-torii.1) (2026-03-26)
 
 ### ⚠ BREAKING CHANGES
