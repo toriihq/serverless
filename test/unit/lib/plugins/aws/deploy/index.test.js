@@ -1289,6 +1289,47 @@ describe('test/unit/lib/plugins/aws/deploy/index.test.js', () => {
     expect(s3UploadStub).to.not.be.called;
   });
 
+  // us-east-1 has no location constraint — S3 reports its absence rather than its name. aws-sdk v2
+  // surfaced that as '', AWS SDK v3 omits the key. These assert the shape the SDK we actually run
+  // returns as well as the one we migrated away from; only the second was covered before, which is
+  // why the v3 migration left every us-east-1 custom-bucket deploy broken and the suite green.
+  for (const [label, LocationConstraint] of [
+    ['undefined (AWS SDK v3)', undefined],
+    ['an empty string (aws-sdk v2)', ''],
+  ]) {
+    it(`accepts a us-east-1 custom deployment bucket reported as ${label}`, async () => {
+      const awsRequestStubMap = {
+        ...baseAwsRequestStubMap,
+        ECR: {
+          describeRepositories: sinon.stub().throws({
+            providerError: { code: 'RepositoryNotFoundException' },
+          }),
+        },
+        S3: {
+          deleteObjects: sinon.stub().resolves({}),
+          listObjectsV2: { Contents: [] },
+          upload: sinon.stub().resolves(),
+          headBucket: {},
+          getBucketLocation: () => ({ LocationConstraint }),
+        },
+        CloudFormation: {
+          describeStacks: { Stacks: [{}] },
+          validateTemplate: {},
+        },
+      };
+
+      await runServerless({
+        fixture: 'function',
+        command: 'deploy',
+        awsRequestStubMap,
+        lastLifecycleHookName: 'aws:deploy:deploy:checkForChanges',
+        configExt: {
+          provider: { region: 'us-east-1', deploymentBucket: 'bucket-name' },
+        },
+      });
+    });
+  }
+
   it('with existing stack - missing custom deployment bucket', async () => {
     const awsRequestStubMap = {
       ...baseAwsRequestStubMap,
