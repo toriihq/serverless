@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [3.38.8](https://github.com/serverless/serverless/compare/v3.38.7...v3.38.8) (2026-09-27)
+
+### Bug Fixes
+
+- **aws-v3:** accept a us-east-1 custom deployment bucket ([#8](https://github.com/serverless/serverless/issues/8)) ([66d3e6d](https://github.com/serverless/serverless/commit/66d3e6d40a017cb77db8061d04c41a8e2954e78d)), closes [#1](https://github.com/serverless/serverless/issues/1) [#4](https://github.com/serverless/serverless/issues/4)
+
 ### [3.38.7](https://github.com/serverless/serverless/compare/v3.38.6...v3.38.7) (2026-07-19)
 
 ### Bug Fixes
