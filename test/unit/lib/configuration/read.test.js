@@ -120,6 +120,42 @@ describe('test/unit/lib/configuration/read.test.js', () => {
     }
   });
 
+  it('should prefer "tsx" over "ts-node" and register it only once', async () => {
+    // Test against different service dir, to not fall into cached `require.resolve` value
+    const serviceDir = 'tsx-service';
+    await fse.outputFile(
+      `${serviceDir}/node_modules/tsx/package.json`,
+      JSON.stringify({ name: 'tsx', exports: { './cjs/api': './cjs-api.js' } })
+    );
+    await fse.outputFile(
+      `${serviceDir}/node_modules/tsx/cjs-api.js`,
+      'module.exports.register = () => { process.tsxRegisterCount = (process.tsxRegisterCount || 0) + 1; };'
+    );
+    await fse.outputFile(
+      `${serviceDir}/node_modules/ts-node.js`,
+      'module.exports.register = () => { throw new Error("ts-node should not be used"); };'
+    );
+    const configuration = {
+      service: 'test-ts',
+      provider: { name: 'aws' },
+    };
+    try {
+      // Fresh module instance, so registration state is not shared with other tests
+      const read = proxyquire('../../../../lib/configuration/read', {});
+      for (const name of ['serverless.ts', 'serverless-other.ts']) {
+        await fsp.writeFile(
+          `${serviceDir}/${name}`,
+          `module.exports = ${JSON.stringify(configuration)}`
+        );
+        expect(await read(`${serviceDir}/${name}`)).to.deep.equal(configuration);
+      }
+      expect(process.tsxRegisterCount).to.equal(1);
+    } finally {
+      delete process.tsxRegisterCount;
+      await fse.remove(serviceDir);
+    }
+  });
+
   it('should support deferred configuration result', async () => {
     // JS configurations are required (so immune to modules caching).
     // In this tests we cannot use same JS configuration path twice for testing
