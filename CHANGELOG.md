@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [3.38.9](https://github.com/serverless/serverless/compare/v3.38.8...v3.38.9) (2026-10-26)
+
+### Features
+
+- **config:** load serverless.ts with tsx when available ([#9](https://github.com/serverless/serverless/issues/9)) ([624e49a](https://github.com/serverless/serverless/commit/624e49a02a4a07bd07d4fd14cdadcfcffb0761b7))
+
 ### [3.38.8](https://github.com/serverless/serverless/compare/v3.38.7...v3.38.8) (2026-09-27)
 
 ### Bug Fixes
