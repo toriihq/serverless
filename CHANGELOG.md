@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [3.38.10](https://github.com/serverless/serverless/compare/v3.38.9...v3.38.10) (2026-11-09)
+
+### Bug Fixes
+
+- **custom-resources:** use AWS SDK v3 on nodejs22.x ([#10](https://github.com/serverless/serverless/issues/10)) ([6cb3906](https://github.com/serverless/serverless/commit/6cb39067c))
+
 ### [3.38.9](https://github.com/serverless/serverless/compare/v3.38.8...v3.38.9) (2026-10-26)
 
 ### Features
